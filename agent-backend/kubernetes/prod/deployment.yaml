@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tasknexus-agent-backend-map
+  namespace: tasknexus
+data:
+  project_id: "YOUR_PROJECT"
+  local: "false"
+  webapp_url: "YOUR_DOMAIN"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tasknexus-agent-backend
+  namespace: tasknexus
+  labels:
+    app: tasknexus-agent-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tasknexus-agent-backend
+  template:
+    metadata:
+      labels:
+        app: tasknexus-agent-backend
+    spec:
+      containers:
+        - name: tasknexus-agent-backend
+          image: gcr.io/YOUR_PROJECT/tasknexus-agent-backend
+          envFrom:
+            - configMapRef:
+                name: tasknexus-agent-backend-map
+          resources:
+            requests:
+              memory: "500Mi"
+              cpu: "500m"
+            limits:
+              memory: "1000Mi"
+              cpu: "1000m"
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: tasknexus-agent-backend-hpa
+  namespace: tasknexus
+  labels:
+    app: tasknexus-agent-backend
+spec:
+  scaleTargetRef:
+    kind: Deployment
+    name: tasknexus-agent-backend
+    apiVersion: apps/v1
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tasknexus-agent-backend
+  namespace: tasknexus
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+spec:
+  selector:
+    app: tasknexus-agent-backend
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: NodePort
+  externalTrafficPolicy: Local

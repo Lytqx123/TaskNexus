@@ -1,0 +1,55 @@
+name: tasknexus
+
+services:
+
+  unstructured-api:
+    ports:
+        - 9500:9500
+    environment:
+        - PORT=9500
+    image: localhost:5000/unstructured-api
+
+  docker_rabbitmq:
+    image: rabbitmq:3.13.1-management
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+
+  docker_mongo:
+    restart: always
+    image: mongo:latest
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongodb_data_container:/data/db
+
+  docker_redis:
+    restart: always
+    image: redis:latest
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+
+  qdrant:
+    ports:
+      - '127.0.0.1:6333:6333'
+      - '127.0.0.1:6334:6334'
+    image: qdrant/qdrant
+    environment:
+      - QDRANT__LOG_LEVEL=DEBUG
+    volumes:
+      - qdrant_data:/qdrant_data
+
+volumes:
+  mongodb_data_container:
+    name: ${TASKNEXUS_MONGO_VOLUME:-tasknexus_mongodb_data_container}
+  redis_data:
+    name: ${TASKNEXUS_REDIS_VOLUME:-tasknexus_redis_data}
+  datasource_files:
+    name: ${TASKNEXUS_DATASOURCE_VOLUME:-tasknexus_datasource_files}
+  qdrant_data:
+    name: ${TASKNEXUS_QDRANT_VOLUME:-tasknexus_qdrant_data}

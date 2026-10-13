@@ -1,0 +1,17 @@
+node_modules
+.next/
+out/
+dist/
+.env
+.env.local
+keyfile.json
+doc/
+!src/lib/airbyte
+static/*
+tsconfig.tsbuildinfo
+coverage/
+/test
+/tests
+/tests-examples
+playwright.*
+playwright-report

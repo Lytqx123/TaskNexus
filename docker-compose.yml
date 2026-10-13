@@ -1,0 +1,381 @@
+name: tasknexus
+
+services:
+
+  unstructured-api:
+    restart: unless-stopped
+    cpus: 2
+    mem_limit: 4g
+    ports:
+        - "127.0.0.1:9500:9500"
+    environment:
+        - PORT=9500
+        - WORKERS=1
+        - OMP_NUM_THREADS=2
+        - OPENBLAS_NUM_THREADS=2
+    image: ${UNSTRUCTURED_IMAGE:-quay.io/unstructured-io/unstructured-api:latest}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9500/healthcheck', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 90s
+
+  docker_rabbitmq:
+    restart: unless-stopped
+    hostname: ${RABBITMQ_HOSTNAME:-tasknexus-rabbitmq}
+    image: rabbitmq:3.13.1-management
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-tasknexus}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-changeme}
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+
+  docker_mongo:
+    restart: always
+    image: ${MONGO_IMAGE:-mongo:7.0}
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongodb_data_container:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  docker_redis:
+    restart: always
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    image: ${REDIS_IMAGE:-redis:7-alpine}
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  tasknexus_webapp:
+    image: tasknexus/webapp:${TASKNEXUS_IMAGE_TAG:-local}
+    restart: always
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        until node -e "fetch(process.env.AIRBYTE_API_URL + '/api/v1/health', { signal: AbortSignal.timeout(5000) }).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))";
+        do echo 'Waiting for local Airbyte...'; sleep 5; done;
+        exec npm run start
+    build:
+      context: webapp/
+      args:
+        - GOOGLE_KEYPATH=keyfile.json
+        - SHORT_COMMIT_HASH=${SHORT_COMMIT_HASH:-}
+        # - NEXT_PUBLIC_ENABLE_GOOGLE_OAUTH=
+        # - NEXT_PUBLIC_ENABLE_GITHUB_OAUTH=
+        - NEXT_PUBLIC_GCS_BUCKET_NAME=${GCS_BUCKET_NAME:-}
+        - NEXT_PUBLIC_GCS_BUCKET_NAME_PRIVATE=${GCS_BUCKET_NAME_PRIVATE:-}
+        - NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:-}
+        - NEXT_PUBLIC_POSTHOG_KEY=
+        - GOOGLE_APPLICATION_CREDENTIALS=/app/keyfile.json
+        - NEXT_PUBLIC_STORAGE_PROVIDER=local
+        - NEXT_PUBLIC_LOCAL_UNSTRUCTURED=1
+        - NEXT_PUBLIC_TASKNEXUS_WEBSITE_URL=${NEXT_PUBLIC_TASKNEXUS_WEBSITE_URL:-}
+        - NEXT_PUBLIC_TASKNEXUS_DOCS_URL=${NEXT_PUBLIC_TASKNEXUS_DOCS_URL:-}
+        - NEXT_PUBLIC_TASKNEXUS_TERMS_URL=${NEXT_PUBLIC_TASKNEXUS_TERMS_URL:-}
+        - NEXT_PUBLIC_TASKNEXUS_PRIVACY_URL=${NEXT_PUBLIC_TASKNEXUS_PRIVACY_URL:-}
+        - NEXT_PUBLIC_TASKNEXUS_SUPPORT_URL=${NEXT_PUBLIC_TASKNEXUS_SUPPORT_URL:-}
+        - NEXT_PUBLIC_TASKNEXUS_SOURCE_URL=${NEXT_PUBLIC_TASKNEXUS_SOURCE_URL:-}
+        - NEXT_PUBLIC_TASKNEXUS_COMMUNITY_URL=${NEXT_PUBLIC_TASKNEXUS_COMMUNITY_URL:-}
+        - NEXT_PUBLIC_TASKNEXUS_LINKEDIN_URL=${NEXT_PUBLIC_TASKNEXUS_LINKEDIN_URL:-}
+        - NEXT_PUBLIC_TASKNEXUS_YOUTUBE_URL=${NEXT_PUBLIC_TASKNEXUS_YOUTUBE_URL:-}
+        - NEXT_PUBLIC_TASKNEXUS_CONTACT_URL=${NEXT_PUBLIC_TASKNEXUS_CONTACT_URL:-}
+        - NEXT_PUBLIC_TASKNEXUS_MEETING_URL=${NEXT_PUBLIC_TASKNEXUS_MEETING_URL:-}
+        - NEXT_PUBLIC_TASKNEXUS_STRUCTURED_OUTPUT_DOCS_URL=${NEXT_PUBLIC_TASKNEXUS_STRUCTURED_OUTPUT_DOCS_URL:-}
+        - NEXT_PUBLIC_PINECONE_INTEGRATION_ID=${NEXT_PUBLIC_PINECONE_INTEGRATION_ID:-}
+        - NEXT_PUBLIC_TASKNEXUS_RESTRICT_EMBEDDINGS_TO_1536=${NEXT_PUBLIC_TASKNEXUS_RESTRICT_EMBEDDINGS_TO_1536:-false}
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      docker_rabbitmq:
+        condition: service_healthy
+      docker_mongo:
+        condition: service_healthy
+      docker_redis:
+        condition: service_healthy
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/keyfile.json
+      - RABBITMQ_PORT=5672
+      - QUEUE_NAME=streaming
+      - RABBITMQ_EXCHANGE=tasknexus
+      - RABBITMQ_ROUTING_KEY=key
+      - RABBITMQ_USERNAME=${RABBITMQ_USERNAME:-tasknexus}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-changeme}
+      - EXPRESS_HOST=0.0.0.0
+      - EXPRESS_PORT=3000
+      - NODE_ENV=production
+      - DB_URL=mongodb://docker_mongo:27017/${TASKNEXUS_DB_NAME:-tasknexus}
+      - REDIS_HOST=docker_redis
+      - REDIS_PASS=
+      - JWT_SECRET=${JWT_SECRET:-changeme}
+      - COOKIE_SECRET=${COOKIE_SECRET:-changeme}
+      - AGENT_BACKEND_SOCKET_TOKEN=${AGENT_BACKEND_SOCKET_TOKEN:-changeme}
+      - PROJECT_ID=${PROJECT_ID:-}
+      - FROM_EMAIL_ADDRESS=${FROM_EMAIL_ADDRESS:-noreply@example.com}
+      - WEBAPP_WEBHOOK_HOST=${WEBAPP_WEBHOOK_HOST:-http://host.docker.internal:3000}
+      - URL_APP=${URL_APP:-http://localhost:3000}
+      - DEBUG=tasknexus:*
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+      - STRIPE_ACCOUNT_SECRET=${STRIPE_ACCOUNT_SECRET:-}
+      - NEXT_PUBLIC_GCS_BUCKET_NAME=${GCS_BUCKET_NAME:-}
+      - NEXT_PUBLIC_GCS_BUCKET_NAME_PRIVATE=${GCS_BUCKET_NAME_PRIVATE:-}
+      - OAUTH_GITHUB_CLIENT_ID=
+      - OAUTH_GITHUB_CLIENT_SECRET=
+      - OAUTH_GOOGLE_CLIENT_ID=
+      - OAUTH_GOOGLE_CLIENT_SECRET=
+      - VECTOR_APP_URL=http://tasknexus_vector_proxy:9001
+      - AIRBYTE_WEB_URL=${AIRBYTE_WEB_URL:-http://host.docker.internal:8006}
+      - AIRBYTE_API_URL=${AIRBYTE_API_URL:-http://host.docker.internal:8006}
+      - AIRBYTE_ADMIN_WORKSPACE_ID=${AIRBYTE_ADMIN_WORKSPACE_ID:-}
+      - AIRBYTE_ADMIN_DESTINATION_ID=${AIRBYTE_ADMIN_DESTINATION_ID:-}
+      - AIRBYTE_USERNAME=${AIRBYTE_USERNAME:-airbyte}
+      - AIRBYTE_PASSWORD=${AIRBYTE_PASSWORD:-password}
+      - AIRBYTE_CLIENT_ID=${AIRBYTE_CLIENT_ID:-}
+      - AIRBYTE_CLIENT_SECRET=${AIRBYTE_CLIENT_SECRET:-}
+      - NEXT_PUBLIC_IS_AIRBYTE_ENABLED=false
+      - GCS_BUCKET_NAME=${GCS_BUCKET_NAME:-}
+      - GCS_BUCKET_LOCATION=${GCS_BUCKET_LOCATION:-}
+      - STRIPE_FREE_PLAN_PRICE_ID=${STRIPE_FREE_PLAN_PRICE_ID:-}
+      - STRIPE_PRO_PLAN_PRICE_ID=${STRIPE_PRO_PLAN_PRICE_ID:-}
+      - STRIPE_TEAMS_PLAN_PRICE_ID=${STRIPE_TEAMS_PLAN_PRICE_ID:-}
+      - STRIPE_ADDON_USERS_PRICE_ID=${STRIPE_ADDON_USERS_PRICE_ID:-}
+      - STRIPE_ADDON_STORAGE_PRICE_ID=${STRIPE_ADDON_STORAGE_PRICE_ID:-}
+      - STRIPE_FREE_PLAN_PRODUCT_ID=${STRIPE_FREE_PLAN_PRODUCT_ID:-}
+      - STRIPE_PRO_PLAN_PRODUCT_ID=${STRIPE_PRO_PLAN_PRODUCT_ID:-}
+      - STRIPE_TEAMS_PLAN_PRODUCT_ID=${STRIPE_TEAMS_PLAN_PRODUCT_ID:-}
+      - STRIPE_ADDON_USERS_PRODUCT_ID=${STRIPE_ADDON_USERS_PRODUCT_ID:-}
+      - STRIPE_ADDON_STORAGE_PRODUCT_ID=${STRIPE_ADDON_STORAGE_PRODUCT_ID:-}
+      - NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:-}
+      - NEXT_PUBLIC_STORAGE_PROVIDER=local
+      - NEXT_PUBLIC_SECRET_PROVIDER=local
+      - MESSAGE_QUEUE_PROVIDER=rabbitmq
+      - UPLOADS_BASE_PATH=/tmp
+      - NEXT_PUBLIC_LOCAL_UNSTRUCTURED=1
+      - NEXT_PUBLIC_TASKNEXUS_WEBSITE_URL=${NEXT_PUBLIC_TASKNEXUS_WEBSITE_URL:-}
+      - NEXT_PUBLIC_TASKNEXUS_DOCS_URL=${NEXT_PUBLIC_TASKNEXUS_DOCS_URL:-}
+      - NEXT_PUBLIC_TASKNEXUS_TERMS_URL=${NEXT_PUBLIC_TASKNEXUS_TERMS_URL:-}
+      - NEXT_PUBLIC_TASKNEXUS_PRIVACY_URL=${NEXT_PUBLIC_TASKNEXUS_PRIVACY_URL:-}
+      - NEXT_PUBLIC_TASKNEXUS_SUPPORT_URL=${NEXT_PUBLIC_TASKNEXUS_SUPPORT_URL:-}
+      - NEXT_PUBLIC_TASKNEXUS_SOURCE_URL=${NEXT_PUBLIC_TASKNEXUS_SOURCE_URL:-}
+      - NEXT_PUBLIC_TASKNEXUS_COMMUNITY_URL=${NEXT_PUBLIC_TASKNEXUS_COMMUNITY_URL:-}
+      - NEXT_PUBLIC_TASKNEXUS_LINKEDIN_URL=${NEXT_PUBLIC_TASKNEXUS_LINKEDIN_URL:-}
+      - NEXT_PUBLIC_TASKNEXUS_YOUTUBE_URL=${NEXT_PUBLIC_TASKNEXUS_YOUTUBE_URL:-}
+      - NEXT_PUBLIC_TASKNEXUS_CONTACT_URL=${NEXT_PUBLIC_TASKNEXUS_CONTACT_URL:-}
+      - NEXT_PUBLIC_TASKNEXUS_MEETING_URL=${NEXT_PUBLIC_TASKNEXUS_MEETING_URL:-}
+      - NEXT_PUBLIC_TASKNEXUS_STRUCTURED_OUTPUT_DOCS_URL=${NEXT_PUBLIC_TASKNEXUS_STRUCTURED_OUTPUT_DOCS_URL:-}
+      - NEXT_PUBLIC_PINECONE_INTEGRATION_ID=${NEXT_PUBLIC_PINECONE_INTEGRATION_ID:-}
+      - NEXT_PUBLIC_TASKNEXUS_RESTRICT_EMBEDDINGS_TO_1536=${NEXT_PUBLIC_TASKNEXUS_RESTRICT_EMBEDDINGS_TO_1536:-false}
+      # Note: Only google cloud functions supported currently, so agent-backend doesn't need a provider env (YET)
+      - FUNCTION_PROVIDER=${FUNCTION_PROVIDER:-local}
+      - GOOGLE_FUNCTION_LOCATION=us-central1
+      - SKIP_STRIPE=
+      - AIRBYTE_RABBITMQ_HOST=${AIRBYTE_RABBITMQ_HOST:-host.docker.internal}
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/login',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    volumes:
+      - datasource_files:/tmp
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  tasknexus_syncserver:
+    image: tasknexus/sync-server:${TASKNEXUS_IMAGE_TAG:-local}
+    command: ["npm", "run", "start:syncserver"]
+    restart: always
+    build:
+      context: webapp/
+      dockerfile: Dockerfile_syncserver
+      args:
+        - SHORT_COMMIT_HASH=${SHORT_COMMIT_HASH:-}
+        - GOOGLE_KEYPATH=keyfile.json
+        - GOOGLE_APPLICATION_CREDENTIALS=/app/keyfile.json
+    depends_on:
+      tasknexus_webapp:
+        condition: service_healthy
+      docker_rabbitmq:
+        condition: service_healthy
+      docker_mongo:
+        condition: service_healthy
+      docker_redis:
+        condition: service_healthy
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/keyfile.json
+      - NODE_ENV=production
+      - DB_URL=mongodb://docker_mongo:27017/${TASKNEXUS_DB_NAME:-tasknexus}
+      - REDIS_HOST=docker_redis
+      - REDIS_PASS=
+      - DEBUG=tasknexus:*,sync-server:*
+      - VECTOR_APP_URL=http://tasknexus_vector_proxy:9001
+      - AIRBYTE_WEB_URL=${AIRBYTE_WEB_URL:-http://host.docker.internal:8006}
+      - AIRBYTE_API_URL=${AIRBYTE_API_URL:-http://host.docker.internal:8006}
+      - AIRBYTE_USERNAME=${AIRBYTE_USERNAME:-airbyte}
+      - AIRBYTE_PASSWORD=${AIRBYTE_PASSWORD:-password}
+      - NEXT_PUBLIC_STORAGE_PROVIDER=local
+      - NEXT_PUBLIC_SECRET_PROVIDER=local
+      - MESSAGE_QUEUE_PROVIDER=rabbitmq
+      - AIRBYTE_RABBITMQ_HOST=${AIRBYTE_RABBITMQ_HOST:-host.docker.internal}
+      - RABBITMQ_USERNAME=${RABBITMQ_USERNAME:-tasknexus}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-changeme}
+      - RABBITMQ_PORT=5672
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  tasknexus_agent_backend:
+    restart: always
+    build:
+      context: agent-backend/
+      args:
+        - SHORT_COMMIT_HASH=${SHORT_COMMIT_HASH:-}
+    ports:
+      - '127.0.0.1:8080:8080'
+    depends_on:
+      tasknexus_webapp:
+        condition: service_healthy
+    image: tasknexus/agent-backend:${TASKNEXUS_IMAGE_TAG:-local}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - datasource_files:/tmp
+    environment:
+      - LOCAL=True
+      - MAX_THREADS=10
+      - BASE_PATH=/app
+      - SOCKET_URL=http://tasknexus_webapp:3000
+      - DB_URL=mongodb://docker_mongo:27017/${TASKNEXUS_DB_NAME:-tasknexus}
+      - REDIS_HOST=docker_redis
+      - QDRANT_HOST=http://qdrant
+      - MONGO_DB_NAME=${TASKNEXUS_DB_NAME:-tasknexus}
+      - MAX_RETRIES=10
+      - AGENT_BACKEND_SOCKET_TOKEN=${AGENT_BACKEND_SOCKET_TOKEN:-changeme}
+      # Note: Only google cloud functions supported currently, so agent-backend doesn't need a provider env (YET)
+      - FUNCTION_PROVIDER=${FUNCTION_PROVIDER:-local}
+      # Notes: Modify the following google cloud storage values to use your own:
+      - GOOGLE_FUNCTION_LOCATION=us-central1
+      - GCS_BUCKET_NAME_PRIVATE=${GCS_BUCKET_NAME_PRIVATE:-}
+      - GCS_BUCKET_NAME=${GCS_BUCKET_NAME:-}
+      - UPLOADS_BASE_PATH=/tmp
+      - GOOGLE_APPLICATION_CREDENTIALS=keyfile.json
+      - PROJECT_ID=${PROJECT_ID:-}
+      - STORAGE_PROVIDER=local
+      - WEBAPP_URL=${URL_APP:-http://localhost:3000}/
+      - OMP_NUM_THREADS=2
+      - OPENBLAS_NUM_THREADS=2
+      - OTEL_SDK_DISABLED=true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/docs', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+
+  tasknexus_vector_proxy:
+    restart: always
+    depends_on:
+      unstructured-api:
+        condition: service_healthy
+      docker_rabbitmq:
+        condition: service_healthy
+      docker_mongo:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    build:
+      context: vector-db-proxy/
+      args:
+        - RELEASE=${RELEASE:-false}
+        - GOOGLE_KEYPATH=keyfile.json
+        - SHORT_COMMIT_HASH=${SHORT_COMMIT_HASH:-}
+    ports:
+      - '127.0.0.1:9001:9001'
+    image: tasknexus/vector-proxy:${TASKNEXUS_IMAGE_TAG:-local}
+    environment:
+      - HOST=0.0.0.0
+      - PORT=9001
+      - MONGO_URI=mongodb://docker_mongo:27017
+      - MONGO_DB_NAME=${TASKNEXUS_DB_NAME:-tasknexus}
+      - RABBITMQ_HOST=docker_rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_STREAM=streaming
+      - RABBITMQ_EXCHANGE=tasknexus
+      - RABBITMQ_ROUTING_KEY=key
+      - RABBITMQ_USERNAME=${RABBITMQ_USERNAME:-tasknexus}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-changeme}
+      - MESSAGE_QUEUE_PROVIDER=rabbitmq
+      - VECTOR_DATABASE=qdrant
+      - VECTOR_DATABASE_URL=http://qdrant:6334
+      - QDRANT_URI=http://qdrant:6334
+      - QDRANT_HOST=http://qdrant
+      - QDRANT_PORT=6334
+      - REDIS_HOST=docker_redis
+      - REDIS_PORT=6379
+      - WEBAPP_HOST=tasknexus_webapp
+      - THREAD_PERCENTAGE_UTILISATION=0.5
+      - USE_GPU=false
+      - LOGGING_LEVEL=warn
+      - UNSTRUCTURED_API_URL=http://unstructured-api:9500/general/v0/general
+    cpus: 2
+
+    volumes:
+      - datasource_files:/tmp
+
+  qdrant:
+    ports:
+      - '127.0.0.1:6333:6333'
+      - '127.0.0.1:6334:6334'
+    image: qdrant/qdrant
+    environment:
+      - QDRANT__LOG_LEVEL=DEBUG
+      - QDRANT__STORAGE__STORAGE_PATH=/qdrant_data
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant_data 
+
+  # minio:
+  #   image: minio/minio
+  #   container_name: minio
+  #   ports:
+  #     - "9000:9000"
+  #   environment:
+  #     MINIO_ROOT_USER: "minioadmin"
+  #     MINIO_ROOT_PASSWORD: "minioadmin"
+  #   volumes:
+  #     - minio_data:/data
+  #   command: server /data
+
+volumes:
+  mongodb_data_container:
+    name: ${TASKNEXUS_MONGO_VOLUME:-tasknexus_mongodb_data_container}
+  redis_data:
+    name: ${TASKNEXUS_REDIS_VOLUME:-tasknexus_redis_data}
+  datasource_files:
+    name: ${TASKNEXUS_DATASOURCE_VOLUME:-tasknexus_datasource_files}
+  qdrant_data:
+    name: ${TASKNEXUS_QDRANT_VOLUME:-tasknexus_qdrant_data}
+  rabbitmq_data:
+    name: ${TASKNEXUS_RABBITMQ_VOLUME:-tasknexus_rabbitmq_data}
+  minio_data:

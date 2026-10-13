@@ -1,0 +1,117 @@
+{
+  "compilerOptions": {
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext",
+      "es2022"
+    ],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "incremental": true,
+    "esModuleInterop": true,
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "target": "ES2022",
+    "baseUrl": "./src",
+    "paths": {
+      "@api": [
+        "api.ts"
+      ],
+      "@socketio": [
+        "socketio.ts"
+      ],
+      "struct/*": [
+        "lib/struct/*"
+      ],
+      "@mw/*": [
+        "lib/middleware/*"
+      ],
+      "email/*": [
+        "lib/email/*"
+      ],
+      "utils/*": [
+        "lib/utils/*"
+      ],
+      "middleware/*": [
+        "lib/middleware/*"
+      ],
+      "misc/*": [
+        "lib/misc/*"
+      ],
+      "function/*": [
+        "lib/function/*"
+      ],
+      "queue/*": [
+        "lib/queue/*"
+      ],
+      "vectordb/*": [
+        "lib/vectordb/*"
+      ],
+      "redis/*": [
+        "lib/redis/*"
+      ],
+      "secret/*": [
+        "lib/secret/*"
+      ],
+      "@permission": [
+        "lib/permissions/Permission.ts"
+      ],
+      "permissions/*": [
+        "lib/permissions/*"
+      ],
+      "airbyte/*": [
+        "lib/airbyte/*"
+      ],
+      "styles/*": [
+        "lib/styles/*"
+      ],
+      "db/*": [
+        "db/*"
+      ],
+      "lib/*": [
+        "lib/*"
+      ],
+      "@dr": [
+        "lib/misc/dynamicresponse.ts"
+      ],
+      "components/*": [
+        "components/*"
+      ],
+      "context/*": [
+        "context/*"
+      ],
+      "storage/*": [
+        "lib/storage/*"
+      ],
+      "secret/*": [
+        "lib/secret/*"
+      ],
+      "modules/*": [
+        "modules/*"
+      ],
+      "store/*": [
+        "store/*"
+      ],
+      "data/*": [
+        "data/*"
+      ]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    "src/test"
+  ],
+  "types": ["@types/jest"]
+}
